@@ -12,3 +12,5 @@ server-esp8266/.vscode/ipch
 server-esp8266/src/secrets.h
 src/secrets.h.example.h
 client-esp8266/src/secrets.h
+client-esp8266/src/secret.h
+client-esp8266/src/secret.h
