@@ -21,10 +21,12 @@ void initializeTimeZone() {
 }
 
 struct_message esp_message;
-void connectToWifi();
+bool connectToWifi();
 void sendEmail(); 
 void smtpCallback(SMTP_Status status);
 void setTime();
+void disableESPNow();
+void reEnableESPNow();
 
 void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   memcpy(&esp_message, incomingData, sizeof(esp_message));
@@ -36,7 +38,6 @@ void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   Serial.println(esp_message.isOpen);
   Serial.println();
 
-  // connectToWifi();
   receivedMessage = true;
 }
 SMTPSession smtp;
@@ -66,24 +67,17 @@ void setup() {
 void loop() {
   if (receivedMessage) {
     receivedMessage = false;
-    connectToWifi();
+    // Disable ESP-NOW before WiFi connection
+    disableESPNow();
+    if (connectToWifi()) {
+      setTime();
+      sendEmail();
+      WiFi.disconnect();
+    }
+    reEnableESPNow();
   }
   delay(1000);
 }
-
-// void connectToWifi() {
-//   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-//   Serial.println("Connecting to Wifi");
-//   while(WiFi.status() != WL_CONNECTED) {
-//     Serial.print(".");
-//     delay(300);
-//   }
-
-//   Serial.println();
-//   Serial.print("Connected with IP: ");
-//   Serial.println(WiFi.localIP());
-//   Serial.println();
-// }
 
 
 void disableESPNow() {
@@ -110,9 +104,7 @@ void reEnableESPNow() {
   Serial.println("ESP-NOW re-enabled");
 }
 
-void connectToWifi() {
-  // Disable ESP-NOW before WiFi connection
-  disableESPNow();
+bool connectToWifi() {
   
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.println("Connecting to Wifi");
@@ -126,7 +118,7 @@ void connectToWifi() {
     
     if (millis() - startAttemptTime > WIFI_TIMEOUT_MS) {
       Serial.println("\nWiFi connection failed!");
-      break;
+      return false;
     }
   }
 
@@ -134,10 +126,9 @@ void connectToWifi() {
     Serial.println("\nConnected with IP: ");
     Serial.println(WiFi.localIP());
     
-    // Send email or perform WiFi-dependent tasks here
-    setTime();
-    sendEmail();
+    return true;
   }
+  return false;
 }
 
 void sendEmail() {
@@ -198,16 +189,6 @@ void sendEmail() {
   
   }
 
-  // void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
-  //   memcpy(&myData, incomingData, sizeof(myData));
-  //   Serial.print("Bytes received: ");
-  //   Serial.println(len);
-  //   Serial.print("Message: ");
-  //   Serial.println(myData.message);
-  //   Serial.print("IsOpen: ");
-  //   Serial.println(myData.isOpen);
-  //   Serial.println();
-  // }
   
   
   DateTime getCurrentDateTime() {
