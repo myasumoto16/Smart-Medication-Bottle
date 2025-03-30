@@ -8,6 +8,8 @@
 #include <time.h>
 #include <espnow.h>
 #include <message.h>
+#include <ESP8266WebServer.h>
+#include <PubSubClient.h>
 
 // During Daylight Saving Time (EDT), it becomes UTC-4 hours
 #define EST_OFFSET_SECONDS (-5 * 3600)
@@ -27,6 +29,14 @@ void smtpCallback(SMTP_Status status);
 void setTime();
 void disableESPNow();
 void reEnableESPNow();
+void connectToMQTTandPublish();
+bool connectToMQTT();
+
+ESP8266WebServer alexaServer(80);
+bool medicationTakenToday = false;
+DateTime lastMedicationDateTime;
+std::unique_ptr<WiFiClientSecure> wifiClient(new WiFiClientSecure());
+PubSubClient mqttClient(*wifiClient);
 
 void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   memcpy(&esp_message, incomingData, sizeof(esp_message));
@@ -62,6 +72,19 @@ void setup() {
   // get recv packer info
   esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
   esp_now_register_recv_cb(OnDataRecv);
+
+  wifiClient->setTrustAnchors(new X509List(AWS_IOT_ROOT_CA));
+
+  wifiClient->setClientRSACert(
+    new X509List(AWS_IOT_CERT),
+    new PrivateKey(AWS_IOT_PRIVATE_KEY));
+
+  mqttClient.setServer(AWS_IOT_ENDPOINT, 8883);  
+  // Set time
+  configTime(EST_OFFSET_SECONDS, 0, "pool.ntp.org", "time.google.com");
+  initializeTimeZone();
+
+
 }
 
 void loop() {
@@ -72,11 +95,48 @@ void loop() {
     if (connectToWifi()) {
       setTime();
       sendEmail();
+      connectToMQTTandPublish();
       WiFi.disconnect();
     }
     reEnableESPNow();
   }
   delay(1000);
+}
+
+
+void connectToMQTTandPublish() {
+    // Connect to MQTT and publish
+    if (connectToMQTT()) {
+       // Create JSON payload
+        String payload = "{";
+        payload += "\"lastTakenTime\":\"" + lastMedicationDateTime.time + "\",";
+        payload += "\"lastTakenDate\":\"" + lastMedicationDateTime.date + "\"";
+        payload += "}";
+        
+        // Publish to medication topic
+        String topic = "medication/status";
+        
+        if (mqttClient.publish(topic.c_str(), payload.c_str())) {
+          Serial.println("Medication status published successfully");
+        } else {
+          Serial.println("Failed to publish medication status");
+        }
+    }
+}
+
+bool connectToMQTT() {
+  Serial.print("Connecting to AWS IoT Core...");
+  
+  String clientId = "ESP8266-" + String(random(0xffff), HEX);
+  
+  if (mqttClient.connect(clientId.c_str())) {
+    Serial.println("connected");
+    return true;
+  } else {
+    Serial.print("failed, rc=");
+    Serial.println(mqttClient.state());
+    return false;
+  }
 }
 
 
@@ -151,7 +211,7 @@ void sendEmail() {
   
     SMTP_Message message;
     DateTime currentTime = getCurrentDateTime();
-
+    lastMedicationDateTime = currentTime;
 
     message.sender.name = F("Smart Medication");
     message.sender.email = AUTHOR_EMAIL;
@@ -186,7 +246,6 @@ void sendEmail() {
     /* Start sending Email and close the session */
     if (!MailClient.sendMail(&smtp, &message))
       ESP_MAIL_PRINTF("Error, Status Code: %d, Error Code: %d, Reason: %s", smtp.statusCode(), smtp.errorCode(), smtp.errorReason().c_str());
-  
   }
 
   
