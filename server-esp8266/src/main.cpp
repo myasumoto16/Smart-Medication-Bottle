@@ -8,8 +8,9 @@
 #include <time.h>
 #include <espnow.h>
 #include <message.h>
-#include <ESP8266WebServer.h>
-#include <PubSubClient.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+#include <WiFiClientSecure.h>
 
 // During Daylight Saving Time (EDT), it becomes UTC-4 hours
 #define EST_OFFSET_SECONDS (-5 * 3600)
@@ -29,14 +30,11 @@ void smtpCallback(SMTP_Status status);
 void setTime();
 void disableESPNow();
 void reEnableESPNow();
-void connectToMQTTandPublish();
-bool connectToMQTT();
+void updateMedicationStatus();
+String getCurrentDateTimeISO8601();
 
-ESP8266WebServer alexaServer(80);
-bool medicationTakenToday = false;
-DateTime lastMedicationDateTime;
-std::unique_ptr<WiFiClientSecure> wifiClient(new WiFiClientSecure());
-PubSubClient mqttClient(*wifiClient);
+std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure());
+String deviceId;
 
 void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   memcpy(&esp_message, incomingData, sizeof(esp_message));
@@ -55,6 +53,7 @@ volatile bool criticalTasksComplete = false;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
+
 void setup() {
   // Initialize Serial Monitor
   Serial.begin(115200);
@@ -68,23 +67,8 @@ void setup() {
     return;
   }
   
-  // Once ESPNow is successfully Init, we will register for recv CB to
-  // get recv packer info
   esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
   esp_now_register_recv_cb(OnDataRecv);
-
-  wifiClient->setTrustAnchors(new X509List(AWS_IOT_ROOT_CA));
-
-  wifiClient->setClientRSACert(
-    new X509List(AWS_IOT_CERT),
-    new PrivateKey(AWS_IOT_PRIVATE_KEY));
-
-  mqttClient.setServer(AWS_IOT_ENDPOINT, 8883);  
-  // Set time
-  configTime(EST_OFFSET_SECONDS, 0, "pool.ntp.org", "time.google.com");
-  initializeTimeZone();
-
-
 }
 
 void loop() {
@@ -95,7 +79,7 @@ void loop() {
     if (connectToWifi()) {
       setTime();
       sendEmail();
-      connectToMQTTandPublish();
+      updateMedicationStatus();
       WiFi.disconnect();
     }
     reEnableESPNow();
@@ -103,40 +87,70 @@ void loop() {
   delay(1000);
 }
 
-
-void connectToMQTTandPublish() {
-    // Connect to MQTT and publish
-    if (connectToMQTT()) {
-       // Create JSON payload
-        String payload = "{";
-        payload += "\"lastTakenTime\":\"" + lastMedicationDateTime.time + "\",";
-        payload += "\"lastTakenDate\":\"" + lastMedicationDateTime.date + "\"";
-        payload += "}";
-        
-        // Publish to medication topic
-        String topic = "medication/status";
-        
-        if (mqttClient.publish(topic.c_str(), payload.c_str())) {
-          Serial.println("Medication status published successfully");
-        } else {
-          Serial.println("Failed to publish medication status");
-        }
-    }
+void updateMedicationStatus() {
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Connected to Wi-Fi");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+} else {
+    Serial.println("Failed to connect to Wi-Fi");
 }
 
-bool connectToMQTT() {
-  Serial.print("Connecting to AWS IoT Core...");
+
+
+  HTTPClient http;
+
+  // Create JSON payload
+  DynamicJsonDocument doc(256);
+  doc["deviceId"] = "ESP8266_Device_1";
+  doc["timestamp"] = getCurrentDateTimeISO8601();
   
-  String clientId = "ESP8266-" + String(random(0xffff), HEX);
+  String jsonPayload;
+  serializeJson(doc, jsonPayload);
   
-  if (mqttClient.connect(clientId.c_str())) {
-    Serial.println("connected");
-    return true;
-  } else {
-    Serial.print("failed, rc=");
-    Serial.println(mqttClient.state());
-    return false;
+  Serial.println("Preparing to update medication status...");
+  Serial.println("JSON Payload:");
+  Serial.println(jsonPayload);
+  
+  // Set the trust anchors for secure connection
+  Serial.println("Setting trust anchors for secure connection...");
+  client->setTrustAnchors(new X509List(api_cert));
+  // Begin HTTP connection to API Gateway
+  Serial.print("Connecting to API Gateway: ");
+  Serial.println(AWS_API_ENDPOINT);
+  if (!http.begin(*client, AWS_API_ENDPOINT)) {
+    Serial.println("Failed to begin HTTP connection");
+    return;
   }
+
+  Serial.println("Successfully began HTTP connection");
+
+  // Adding headers to the request
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-api-key", api_key);
+
+  Serial.println("Sending HTTP POST request...");
+  
+  // Send the request
+  int httpCode = http.POST(jsonPayload);
+  
+  if (httpCode > 0) {
+    String response = http.getString();
+    Serial.printf("HTTP response code: %d\n", httpCode);
+    Serial.println(response);
+  } else {
+      Serial.printf("HTTP request failed, error: %s\n", http.errorToString(httpCode).c_str());
+      String response = http.getString();
+      if (response.length() > 0) {
+          Serial.println("Response body:");
+          Serial.println(response);  // Print the error message from the server
+      } else {
+          Serial.println("No response received from the server.");
+      }
+  }
+  
+  Serial.println("Ending HTTP session...");
+  http.end();
 }
 
 
@@ -170,7 +184,7 @@ bool connectToWifi() {
   Serial.println("Connecting to Wifi");
   
   unsigned long startAttemptTime = millis();
-  const unsigned long WIFI_TIMEOUT_MS = 30000;  // 10 second timeout
+  const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 second timeout
   
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
@@ -211,8 +225,7 @@ void sendEmail() {
   
     SMTP_Message message;
     DateTime currentTime = getCurrentDateTime();
-    lastMedicationDateTime = currentTime;
-
+    
     message.sender.name = F("Smart Medication");
     message.sender.email = AUTHOR_EMAIL;
     message.subject = "Medication Notification : " + currentTime.date;
@@ -281,6 +294,20 @@ void sendEmail() {
     return dt;
   }
   
+  String getCurrentDateTimeISO8601() {
+    time_t now;
+    struct tm timeinfo;
+    
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    char iso8601Buff[20]; // Buffer for ISO format
+    strftime(iso8601Buff, sizeof(iso8601Buff), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+    
+    return String(iso8601Buff);
+}
+
+
   void setTime() {
       // Explicitly configure and sync time
     configTime(EST_OFFSET_SECONDS, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
@@ -301,7 +328,6 @@ void sendEmail() {
       Serial.println("Time synchronized successfully!");
     }
 
-    // Rest of your setup continues...
     initializeTimeZone();
 
   }
