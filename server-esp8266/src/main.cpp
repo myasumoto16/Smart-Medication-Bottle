@@ -15,7 +15,7 @@
 // During Daylight Saving Time (EDT), it becomes UTC-4 hours
 #define EST_OFFSET_SECONDS (-5 * 3600)
 #define EDT_OFFSET_SECONDS (-4 * 3600)
-uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; // Broadcast address
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 bool receivedMessage = false;
 void initializeTimeZone() {
   // Explicitly set EST timezone
@@ -29,7 +29,7 @@ void sendEmail();
 void smtpCallback(SMTP_Status status);
 void setTime();
 void disableESPNow();
-void reEnableESPNow();
+void enableESPNow();
 void updateMedicationStatus();
 String getCurrentDateTimeISO8601();
 
@@ -58,17 +58,7 @@ void setup() {
   // Initialize Serial Monitor
   Serial.begin(115200);
   
-  // Set device as a Wi-Fi Station
-  WiFi.mode(WIFI_STA);
-
-  // Init ESP-NOW
-  if (esp_now_init() != 0) {
-    Serial.println("Error initializing ESP-NOW");
-    return;
-  }
-  
-  esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
-  esp_now_register_recv_cb(OnDataRecv);
+  enableESPNow();
 }
 
 void loop() {
@@ -80,9 +70,9 @@ void loop() {
       setTime();
       sendEmail();
       updateMedicationStatus();
-      WiFi.disconnect();
+      WiFi.disconnect(true);
     }
-    reEnableESPNow();
+    enableESPNow();
   }
   delay(1000);
 }
@@ -95,9 +85,6 @@ void updateMedicationStatus() {
 } else {
     Serial.println("Failed to connect to Wi-Fi");
 }
-
-
-
   HTTPClient http;
 
   // Create JSON payload
@@ -164,18 +151,21 @@ void disableESPNow() {
   Serial.println("ESP-NOW disabled");
 }
 
-void reEnableESPNow() {
-  // Reinitialize ESP-NOW
+void enableESPNow() {
+  // Set device as a Wi-Fi Station
+  WiFi.mode(WIFI_STA);
+
+  // Init ESP-NOW
   if (esp_now_init() != 0) {
-    Serial.println("Error reinitializing ESP-NOW");
+    Serial.println("Error initializing ESP-NOW");
     return;
   }
   
-  // Re-register receive callback
   esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
   esp_now_register_recv_cb(OnDataRecv);
-  
-  Serial.println("ESP-NOW re-enabled");
+  esp_now_add_peer(clientAddress, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+
+  Serial.println("ESP-NOW enabled");
 }
 
 bool connectToWifi() {
