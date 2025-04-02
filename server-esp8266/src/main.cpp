@@ -12,9 +12,8 @@
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 
-// During Daylight Saving Time (EDT), it becomes UTC-4 hours
-#define EST_OFFSET_SECONDS (-5 * 3600)
-#define EDT_OFFSET_SECONDS (-4 * 3600)
+#define DST_OFFSET_SECONDS 3600  
+#define EST_OFFSET_SECONDS -18000 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 bool receivedMessage = false;
 void initializeTimeZone() {
@@ -88,7 +87,7 @@ void updateMedicationStatus() {
   HTTPClient http;
 
   // Create JSON payload
-  DynamicJsonDocument doc(256);
+  DynamicJsonDocument doc(128);
   doc["deviceId"] = "ESP8266_Device_1";
   doc["timestamp"] = getCurrentDateTimeISO8601();
   
@@ -101,7 +100,12 @@ void updateMedicationStatus() {
   
   // Set the trust anchors for secure connection
   Serial.println("Setting trust anchors for secure connection...");
-  client->setTrustAnchors(new X509List(api_cert));
+  // client->setTimeout(15000); 
+  // client.reset(new WiFiClientSecure());
+  client->setInsecure();
+  client->setTrustAnchors(new X509List(IRG_Root_X1));
+  // client->setTrustAnchors(&cert);
+
   // Begin HTTP connection to API Gateway
   Serial.print("Connecting to API Gateway: ");
   Serial.println(AWS_API_ENDPOINT);
@@ -297,30 +301,51 @@ void sendEmail() {
     return String(iso8601Buff);
 }
 
-
-  void setTime() {
-      // Explicitly configure and sync time
-    configTime(EST_OFFSET_SECONDS, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
-    
-    // Wait for time to be set
-    time_t now = time(nullptr);
-    int attempts = 0;
-    while (now < 1600000000 && attempts < 10) {  // Check if time is reasonable
+void setTime() {
+  Serial.println("Setting time via NTP...");
+  
+  // Configure and sync time, using EST as the base time zone
+  configTime(EST_OFFSET_SECONDS, DST_OFFSET_SECONDS, "pool.ntp.org", "time.google.com", "time.nist.gov");
+  
+  // Wait for time to be set
+  time_t now = time(nullptr);
+  int attempts = 0;
+  const int MAX_ATTEMPTS = 20;
+  
+  Serial.print("Waiting for NTP time sync");
+  while (now < 1600000000 && attempts < MAX_ATTEMPTS) {  // Sept 2020 timestamp as sanity check
       delay(500);
       Serial.print(".");
       now = time(nullptr);
       attempts++;
-    }
-
-    if (now < 1600000000) {
-      Serial.println("Failed to set time!");
-    } else {
-      Serial.println("Time synchronized successfully!");
-    }
-
-    initializeTimeZone();
-
   }
+  Serial.println();
+  
+  if (now < 1600000000) {
+      Serial.println("Failed to set time! Certificate validation may fail.");
+  } else {
+      // Convert to readable format and print
+      struct tm timeinfo;
+      localtime_r(&now, &timeinfo);
+      
+      char timeStr[50];
+      strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      
+      Serial.print("Time synchronized successfully: ");
+      Serial.println(timeStr);
+      
+      // Check if DST is active
+      if (timeinfo.tm_isdst) {
+          Serial.println("Daylight Saving Time is active");
+      } else {
+          Serial.println("Standard Time is active");
+      }
+  }
+
+  initializeTimeZone();
+}
+
+  
   /* Callback function to get the Email sending status */
   void smtpCallback(SMTP_Status status){
     Serial.println(status.info());
