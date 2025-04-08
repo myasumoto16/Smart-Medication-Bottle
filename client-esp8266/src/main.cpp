@@ -37,6 +37,7 @@ void setup() {
     // Send message via ESP-NOW
     esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));
     ESP.deepSleep(0);
+    Serial.println("Sleeping started - this shouldn't run");
 
 }
 

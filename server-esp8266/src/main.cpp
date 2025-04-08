@@ -56,6 +56,7 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org");
 void setup() {
   // Initialize Serial Monitor
   Serial.begin(115200);
+  Serial.println(WiFi.macAddress());
   
   enableESPNow();
 }
@@ -103,7 +104,7 @@ void updateMedicationStatus() {
   // client->setTimeout(15000); 
   // client.reset(new WiFiClientSecure());
   client->setInsecure();
-  client->setTrustAnchors(new X509List(IRG_Root_X1));
+  // client->setTrustAnchors(new X509List(IRG_Root_X1));
   // client->setTrustAnchors(&cert);
 
   // Begin HTTP connection to API Gateway
